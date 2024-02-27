@@ -9,13 +9,11 @@ rules:
   - ""
   resources:
   - configmaps
-  - endpoints
-  - namespaces
-  - pods
   - secrets
-  - services
+  - serviceaccounts
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
@@ -24,10 +22,12 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - serviceaccounts
+  - endpoints
+  - namespaces
+  - pods
+  - services
   verbs:
   - create
-  - delete
   - get
   - list
   - patch
