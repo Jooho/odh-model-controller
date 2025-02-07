@@ -148,7 +148,7 @@ func needToAddRayTLSGenerator(pod *corev1.Pod) bool {
 	for _, container := range pod.Spec.Containers {
 		if container.Name == kserveconstants.InferenceServiceContainerName || container.Name == constants.WorkerContainerName {
 			for _, envVar := range container.Env {
-				if envVar.Name == "RAY_USE_TLS" && envVar.Value != "0" {
+				if envVar.Name == constants.RayUseTlsEnvName && envVar.Value != "0" {
 					return true
 				}
 			}

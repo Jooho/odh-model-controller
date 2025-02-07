@@ -22,11 +22,8 @@ import (
 func setupLogger(t *testing.T) logr.Logger {
 	zapLogger, _ := zap.NewProduction()
 	t.Cleanup(func() {
-		if err := zapLogger.Sync(); err != nil {
-			t.Errorf("failed to sync zap logger: %v", err)
-		}
+		_ = zapLogger.Sync()
 	})
-
 	return zapr.NewLogger(zapLogger)
 }
 
@@ -80,7 +77,7 @@ func TestUpdateSecret_Concurrent(t *testing.T) {
 					},
 					Env: []corev1.EnvVar{
 						{
-							Name:  "RAY_USE_TLS",
+							Name:  constants.RayUseTlsEnvName,
 							Value: "1",
 						},
 					},
@@ -110,7 +107,7 @@ func TestUpdateSecret_Concurrent(t *testing.T) {
 			err = fakeClient.Create(context.TODO(), podCopy)
 			assert.NoError(t, err, "should be able to create the Pod")
 
-			err := updateSecret(fakeClient, logger, caCertSecret, namespace, podCopy)
+			err := updateSecret(context.TODO(), fakeClient, logger, caCertSecret, namespace, podCopy)
 			assert.NoError(t, err, "updateSecret should not return an error")
 		}(podIPs[i])
 	}
@@ -177,7 +174,7 @@ func TestReconcileRoleBinding(t *testing.T) {
 					},
 					Env: []corev1.EnvVar{
 						{
-							Name:  "RAY_USE_TLS",
+							Name:  constants.RayUseTlsEnvName,
 							Value: "1",
 						},
 					},
@@ -186,7 +183,7 @@ func TestReconcileRoleBinding(t *testing.T) {
 		},
 	}
 
-	err := reconcileRoleBinding(fakeClient, logger, targetNamespace, testPod)
+	err := reconcileRoleBinding(context.TODO(), fakeClient, logger, targetNamespace, testPod)
 	assert.NoError(t, err, "Expected no error during reconcileRoleBinding")
 
 	roleBinding := &k8srbacv1.RoleBinding{}

@@ -112,6 +112,7 @@ const (
 
 // Ray
 const (
+	RayUseTlsEnvName                  = "RAY_USE_TLS"
 	RayCASecretName                   = "ray-ca-tls"
 	RayTLSSecretName                  = "ray-tls"
 	RayTLSGeneratorInitContainerName  = "ray-tls-generator"

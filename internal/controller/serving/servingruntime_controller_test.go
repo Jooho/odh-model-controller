@@ -133,21 +133,21 @@ var _ = Describe("ServingRuntime Controller (Multi Node Reconciler)", func() {
 			nonMultinodeServingRuntime.SetNamespace(testNs)
 			Expect(k8sClient.Create(ctx, nonMultinodeServingRuntime)).Should(Succeed())
 
-			Eventually(func() error {
+			Consistently(func() error {
 				secret := &corev1.Secret{}
 				key := types.NamespacedName{Name: constants.RayTLSSecretName, Namespace: testNs}
 				err = k8sClient.Get(ctx, key, secret)
 				return err
 			}, time.Second*3, interval).ShouldNot(Succeed())
 
-			Eventually(func() error {
+			Consistently(func() error {
 				role := &k8srbacv1.Role{}
 				key := types.NamespacedName{Name: constants.RayTLSSecretReaderRoleName, Namespace: testNs}
 				err = k8sClient.Get(ctx, key, role)
 				return err
 			}, time.Second*3, interval).ShouldNot(Succeed())
 
-			Eventually(func() error {
+			Consistently(func() error {
 				rolebinding := &k8srbacv1.RoleBinding{}
 				key := types.NamespacedName{Name: constants.RayTLSSecretReaderRoleBindingName, Namespace: testNs}
 				err = k8sClient.Get(ctx, key, rolebinding)
