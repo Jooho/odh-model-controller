@@ -132,7 +132,7 @@ var _ = Describe("AuthPolicyTemplateLoader", func() {
 			scheme := runtime.NewScheme()
 			Expect(kservev1alpha1.AddToScheme(scheme)).To(Succeed())
 			fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-			loader = resources.NewKServeAuthPolicyTemplateLoader(fakeClient, scheme)
+			loader = resources.NewKServeAuthPolicyTemplateLoader(fakeClient)
 
 			dummyLLMISvc = kservev1alpha1.LLMInferenceService{
 				ObjectMeta: v1.ObjectMeta{

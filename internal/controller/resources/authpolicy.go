@@ -80,13 +80,11 @@ func (k *kserveAuthPolicyDetector) Detect(_ context.Context, annotations map[str
 
 type kserveAuthPolicyTemplateLoader struct {
 	client client.Client
-	scheme *runtime.Scheme
 }
 
-func NewKServeAuthPolicyTemplateLoader(client client.Client, scheme *runtime.Scheme) AuthPolicyTemplateLoader {
+func NewKServeAuthPolicyTemplateLoader(client client.Client) AuthPolicyTemplateLoader {
 	return &kserveAuthPolicyTemplateLoader{
 		client: client,
-		scheme: scheme,
 	}
 }
 
