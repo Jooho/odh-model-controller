@@ -23,13 +23,11 @@ import (
 	"github.com/hashicorp/go-multierror"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	kuadrantv1 "github.com/kuadrant/kuadrant-operator/api/v1"
-	"github.com/opendatahub-io/odh-model-controller/internal/controller/constants"
+	"github.com/opendatahub-io/odh-model-controller/internal/controller/resources"
 	parentreconcilers "github.com/opendatahub-io/odh-model-controller/internal/controller/serving/reconcilers"
 	"github.com/opendatahub-io/odh-model-controller/internal/controller/utils"
-	corev1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,6 +42,7 @@ type LLMInferenceServiceReconciler struct {
 	client.Client
 	Scheme                 *runtime.Scheme
 	subResourceReconcilers []parentreconcilers.LLMSubResourceReconciler
+	authPolicyMatcher      resources.AuthPolicyMatcher
 }
 
 func NewLLMInferenceServiceReconciler(client client.Client, scheme *runtime.Scheme, config *rest.Config) *LLMInferenceServiceReconciler {
@@ -54,6 +53,7 @@ func NewLLMInferenceServiceReconciler(client client.Client, scheme *runtime.Sche
 		Client:                 client,
 		Scheme:                 scheme,
 		subResourceReconcilers: subResourceReconcilers,
+		authPolicyMatcher:      resources.NewKServeAuthPolicyMatcher(client),
 	}
 }
 
@@ -97,8 +97,6 @@ func (r *LLMInferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.
 // +kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 
 func (r *LLMInferenceServiceReconciler) SetupWithManager(mgr ctrl.Manager, setupLog logr.Logger) error {
-	logger := mgr.GetLogger().WithName("LLMInferenceService.SetupWithManager")
-
 	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&kservev1alpha1.LLMInferenceService{}).
 		Named("llminferenceservice")
@@ -107,7 +105,7 @@ func (r *LLMInferenceServiceReconciler) SetupWithManager(mgr ctrl.Manager, setup
 
 	if ok, err := utils.IsCrdAvailable(mgr.GetConfig(), kuadrantv1.GroupVersion.String(), "AuthPolicy"); ok && err == nil {
 		builder = builder.Watches(&kuadrantv1.AuthPolicy{},
-			r.enqueueOnAuthPolicyChange(logger)).
+			r.enqueueOnAuthPolicyChange()).
 			WithEventFilter(predicate.Funcs{
 				CreateFunc: func(e event.CreateEvent) bool {
 					return false
@@ -124,70 +122,21 @@ func (r *LLMInferenceServiceReconciler) SetupWithManager(mgr ctrl.Manager, setup
 	return builder.Complete(r)
 }
 
-func makeReconcileRequest(llmSvc kservev1alpha1.LLMInferenceService) reconcile.Request {
-	return reconcile.Request{NamespacedName: types.NamespacedName{
-		Namespace: llmSvc.Namespace,
-		Name:      llmSvc.Name,
-	}}
-}
-
-func (r *LLMInferenceServiceReconciler) enqueueOnAuthPolicyChange(logger logr.Logger) handler.EventHandler {
-	logger = logger.WithName("enqueueOnAuthPolicyChange")
+func (r *LLMInferenceServiceReconciler) enqueueOnAuthPolicyChange() handler.EventHandler {
 	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, object client.Object) []reconcile.Request {
-		sub := object.(*kuadrantv1.AuthPolicy)
-		reqs := make([]reconcile.Request, 0, 2)
-		targetKind := sub.Spec.TargetRef.Kind
-		gatewayNamespace, gatewayName, err := utils.GetGatewayInfoFromConfigMap(ctx, r.Client)
-		if err != nil {
-			logger.Error(err, "Failed to get gateway info from config map")
-			return reqs
+		authPolicy := object.(*kuadrantv1.AuthPolicy)
+		targetKind := authPolicy.Spec.TargetRef.Kind
+
+		if targetKind == "HTTPRoute" {
+			if namespacedName, found := r.authPolicyMatcher.FindLLMServiceFromHTTPRouteAuthPolicy(authPolicy); found {
+				return []reconcile.Request{{NamespacedName: namespacedName}}
+			}
 		}
 
-		listNamespace := corev1.NamespaceAll
-		continueToken := ""
-		for {
-			llmSvcList := &kservev1alpha1.LLMInferenceServiceList{}
-			if err := r.Client.List(ctx, llmSvcList, &client.ListOptions{Namespace: listNamespace, Continue: continueToken}); err != nil {
-				logger.Error(err, "Failed to list LLMInferenceService")
-				return reqs
-			}
-			for _, llmSvc := range llmSvcList.Items {
-				if targetKind == "HTTPRoute" {
-					if constants.GetHTTPRouteName(llmSvc.Name) != string(sub.Spec.TargetRef.Name) {
-						continue
-					} else {
-						reqs = append(reqs, makeReconcileRequest(llmSvc))
-						return reqs
-					}
-				} else if targetKind == "Gateway" {
-					isAffected := false
-
-					if llmSvc.Spec.Router.Gateway == nil {
-						isAffected = sub.Namespace == gatewayNamespace && string(sub.Spec.TargetRef.Name) == gatewayName
-					} else {
-						// Path 2: Using explicit gateway references
-						for _, ref := range llmSvc.Spec.Router.Gateway.Refs {
-							if string(ref.Name) == sub.Name && string(ref.Namespace) == sub.Namespace {
-								isAffected = true
-								break
-							}
-						}
-					}
-
-					if isAffected {
-						reqs = append(reqs, makeReconcileRequest(llmSvc))
-						return reqs
-					}
-				}
-			}
-
-			if llmSvcList.Continue == "" {
-				break
-			}
-			continueToken = llmSvcList.Continue
+		if namespacedName, found := r.authPolicyMatcher.FindLLMServiceFromGatewayAuthPolicy(ctx, authPolicy, r.Client); found {
+			return []reconcile.Request{{NamespacedName: namespacedName}}
 		}
-
-		return reqs
+		return []reconcile.Request{}
 	})
 }
 

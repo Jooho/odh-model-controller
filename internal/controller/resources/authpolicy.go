@@ -27,6 +27,7 @@ import (
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	kuadrantv1 "github.com/kuadrant/kuadrant-operator/api/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -50,6 +51,11 @@ type AuthPolicyStore interface {
 	Remove(ctx context.Context, key types.NamespacedName) error
 	Create(ctx context.Context, authPolicy *kuadrantv1.AuthPolicy) error
 	Update(ctx context.Context, authPolicy *kuadrantv1.AuthPolicy) error
+}
+
+type AuthPolicyMatcher interface {
+	FindLLMServiceFromHTTPRouteAuthPolicy(authPolicy *kuadrantv1.AuthPolicy) (types.NamespacedName, bool)
+	FindLLMServiceFromGatewayAuthPolicy(ctx context.Context, authPolicy *kuadrantv1.AuthPolicy, c client.Client) (types.NamespacedName, bool)
 }
 
 //go:embed template/authpolicy_llm_isvc_userdefined.yaml
@@ -272,4 +278,83 @@ func (c *clientAuthPolicyStore) Update(ctx context.Context, authPolicy *kuadrant
 		authPolicy.SetResourceVersion(current.GetResourceVersion())
 		return c.client.Update(ctx, authPolicy)
 	})
+}
+
+type kserveAuthPolicyMatcher struct {
+	client client.Client
+}
+
+func NewKServeAuthPolicyMatcher(client client.Client) AuthPolicyMatcher {
+	return &kserveAuthPolicyMatcher{
+		client: client,
+	}
+}
+
+func (k *kserveAuthPolicyMatcher) FindLLMServiceFromHTTPRouteAuthPolicy(authPolicy *kuadrantv1.AuthPolicy) (types.NamespacedName, bool) {
+	for _, ownerRef := range authPolicy.OwnerReferences {
+		if ownerRef.Kind == "LLMInferenceService" {
+			return types.NamespacedName{
+				Name:      ownerRef.Name,
+				Namespace: authPolicy.Namespace,
+			}, true
+		}
+	}
+
+	httpRouteName := string(authPolicy.Spec.TargetRef.Name)
+	if strings.HasSuffix(httpRouteName, constants.HTTPRouteNameSuffix) {
+		llmisvcName := strings.TrimSuffix(httpRouteName, constants.HTTPRouteNameSuffix)
+		return types.NamespacedName{
+			Name:      llmisvcName,
+			Namespace: authPolicy.Namespace,
+		}, true
+	}
+
+	return types.NamespacedName{}, false
+}
+
+func (k *kserveAuthPolicyMatcher) FindLLMServiceFromGatewayAuthPolicy(ctx context.Context, authPolicy *kuadrantv1.AuthPolicy, c client.Client) (types.NamespacedName, bool) {
+	gatewayNamespace, gatewayName, err := controllerutils.GetGatewayInfoFromConfigMap(ctx, k.client)
+	if err != nil {
+		// Fallback to default gateway values when ConfigMap is not available
+		gatewayNamespace = constants.DefaultGatewayNamespace
+		gatewayName = constants.DefaultGatewayName
+	}
+
+	listNamespace := corev1.NamespaceAll
+	continueToken := ""
+	for {
+		llmSvcList := &kservev1alpha1.LLMInferenceServiceList{}
+		if err := c.List(ctx, llmSvcList, &client.ListOptions{Namespace: listNamespace, Continue: continueToken}); err != nil {
+			return types.NamespacedName{}, false
+		}
+
+		for _, llmSvc := range llmSvcList.Items {
+			if k.isGatewayMatchedWithInfo(&llmSvc, authPolicy, gatewayNamespace, gatewayName) {
+				return types.NamespacedName{
+					Name:      llmSvc.Name,
+					Namespace: llmSvc.Namespace,
+				}, true
+			}
+		}
+
+		if llmSvcList.Continue == "" {
+			break
+		}
+		continueToken = llmSvcList.Continue
+	}
+
+	return types.NamespacedName{}, false
+}
+
+func (k *kserveAuthPolicyMatcher) isGatewayMatchedWithInfo(llmSvc *kservev1alpha1.LLMInferenceService, authPolicy *kuadrantv1.AuthPolicy, gatewayNamespace, gatewayName string) bool {
+	if llmSvc.Spec.Router == nil || llmSvc.Spec.Router.Gateway == nil {
+		return authPolicy.Namespace == gatewayNamespace && string(authPolicy.Spec.TargetRef.Name) == gatewayName
+	}
+
+	for _, ref := range llmSvc.Spec.Router.Gateway.Refs {
+		if string(ref.Name) == string(authPolicy.Spec.TargetRef.Name) && string(ref.Namespace) == authPolicy.Namespace {
+			return true
+		}
+	}
+	return false
 }
