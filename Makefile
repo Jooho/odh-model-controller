@@ -68,6 +68,12 @@ manifests-update:
 			| tail -n +2 > config/crd/external/serving.kserve.io_inferenceservices.yaml; \
 		wget -O - https://raw.githubusercontent.com/kserve/kserve/$(KSERVE_MANIFESTS_REVISION)/config/crd/full/serving.kserve.io_servingruntimes.yaml \
 			| tail -n +2 > config/crd/external/serving.kserve.io_servingruntimes.yaml; \
+		echo "Downloading KServe LLM CRDs to test/crds/..."; \
+		mkdir -p test/crds; \
+		wget -O test/crds/serving.kserve.io_llminferenceservices.yaml \
+			https://raw.githubusercontent.com/kserve/kserve/$(KSERVE_MANIFESTS_REVISION)/config/crd/full/serving.kserve.io_llminferenceservices.yaml; \
+		wget -O test/crds/serving.kserve.io_llminferenceserviceconfigs.yaml \
+			https://raw.githubusercontent.com/kserve/kserve/$(KSERVE_MANIFESTS_REVISION)/config/crd/full/serving.kserve.io_llminferenceserviceconfigs.yaml; \
 		echo "$(KSERVE_MANIFESTS_REVISION)" > "$(KSERVE_REVISION_FILE)"; \
 		echo "KServe manifests updated to revision $(KSERVE_MANIFESTS_REVISION) and revision stored in $(KSERVE_REVISION_FILE)."; \
 	else \
@@ -79,22 +85,50 @@ manifests: manifests-update controller-gen ## Generate WebhookConfiguration, Clu
 	# Any customization needed, apply to a patch in the kustomize.yaml file on webhooks
 	$(CONTROLLER_GEN) rbac:roleName=odh-model-controller-role,headerFile="hack/manifests_boilerplate.yaml.txt" crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
-# TODO: Evaluate if this is still needed
-external-manifests:
-	go get github.com/kserve/modelmesh-serving
-	$(CONTROLLER_GEN) crd \
-		paths=${GOPATH}/pkg/mod/github.com/kserve/modelmesh-serving@v0.8.0/apis/serving/v1alpha1 \
-		output:crd:artifacts:config=config/crd/external
+# Extract versions from go.mod for external manifests
+GATEWAY_API_VERSION = $(shell go list -m sigs.k8s.io/gateway-api | cut -d' ' -f2)
+KUADRANT_VERSION = $(shell go list -m github.com/kuadrant/kuadrant-operator | cut -d' ' -f2)
 
-	go get github.com/openshift/api
-	$(CONTROLLER_GEN) crd \
-		paths=${GOPATH}/pkg/mod/github.com/openshift/api@v3.9.0+incompatible/route/v1 \
-		output:crd:artifacts:config=config/crd/external
-# go get maistra.io/api/core/v1
-# $(CONTROLLER_GEN) crd \
-# 	paths=${GOPATH}/pkg/mod/maistra.io/api \
-# 	output:crd:artifacts:config=config/crd/external
-## https://raw.githubusercontent.com/maistra/api/maistra-2.2/manifests/maistra.io_servicemeshmembers.yaml
+# Define the file to store external manifest versions
+EXTERNAL_MANIFESTS_VERSION_FILE = test/crds/.external_manifests_versions
+
+.PHONY: external-manifests-update
+external-manifests-update:
+	@echo "Checking external manifest versions..."
+	@mkdir -p test/crds
+	@mkdir -p $$(dirname $(EXTERNAL_MANIFESTS_VERSION_FILE))
+	@current_versions=""; \
+	if [ -f "$(EXTERNAL_MANIFESTS_VERSION_FILE)" ]; then \
+		current_versions="$$(cat $(EXTERNAL_MANIFESTS_VERSION_FILE) 2>/dev/null)"; \
+	fi; \
+	expected_versions="GATEWAY_API_VERSION=$(GATEWAY_API_VERSION)\nKUADRANT_VERSION=$(KUADRANT_VERSION)"; \
+	if [ "$$current_versions" != "$$expected_versions" ]; then \
+		echo "External manifest versions changed or no stored versions found."; \
+		echo "Gateway API: $(GATEWAY_API_VERSION)"; \
+		echo "Kuadrant: $(KUADRANT_VERSION)"; \
+		echo "Downloading external manifests..."; \
+		\
+		echo "Downloading Gateway API CRDs..."; \
+		wget -O test/crds/gatewayapi_gatewayclasses.yaml \
+			https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/$(GATEWAY_API_VERSION)/config/crd/standard/gateway.networking.k8s.io_gatewayclasses.yaml; \
+		wget -O test/crds/gatewayapi_gateway.yaml \
+			https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/$(GATEWAY_API_VERSION)/config/crd/standard/gateway.networking.k8s.io_gateways.yaml; \
+		wget -O test/crds/gatewayapi_httproute.yaml \
+			https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/$(GATEWAY_API_VERSION)/config/crd/standard/gateway.networking.k8s.io_httproutes.yaml; \
+		\
+		echo "Downloading Kuadrant AuthPolicy CRD..."; \
+		wget -O test/crds/kuadrant.io_authpolices.yaml \
+			https://raw.githubusercontent.com/Kuadrant/kuadrant-operator/$(KUADRANT_VERSION)/config/crd/bases/kuadrant.io_authpolicies.yaml; \
+		\
+		echo -e "$$expected_versions" > "$(EXTERNAL_MANIFESTS_VERSION_FILE)"; \
+		echo "External manifests updated and versions stored in $(EXTERNAL_MANIFESTS_VERSION_FILE)."; \
+	else \
+		echo "External manifests are already up-to-date (based on $(EXTERNAL_MANIFESTS_VERSION_FILE))."; \
+	fi
+
+.PHONY: external-manifests
+external-manifests: external-manifests-update ## Download external CRD manifests for testing from go.mod versions
+	@echo "External manifests are ready in test/crds/"
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
